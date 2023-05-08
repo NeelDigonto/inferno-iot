@@ -101,6 +101,7 @@ function main() {
         try {
           //console.log(req.files.imageFile);
           //fs.writeFileSync(`./abc${counter++}.jpg`, req.files.imageFile.data);
+          fs.writeFileSync(`./test.jpg`, req.files.imageFile.data);
 
           const result = await ValidateImage(req.files.imageFile.data);
           console.log(JSON.stringify(result));

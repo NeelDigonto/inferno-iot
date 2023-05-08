@@ -40,30 +40,151 @@ WiFiClient client;
 #define HREF_GPIO_NUM 23
 #define PCLK_GPIO_NUM 22
 
-const int timerInterval = 1000;    // time between each HTTP POST image
+const int timerInterval = 10;      // time between each HTTP POST image
 unsigned long previousMillis = 0;  // last time image was sent
 
-String sendPhoto();
+String checkPhoto() {
+  String getAll;
+  String getBody;
 
-void setup() {
-  // put your setup code here, to run once:
+  camera_fb_t* fb = NULL;
 
-  WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0);
-  Serial.begin(9600);
-  // Serial.setDebugOutput(true);
-  Serial.println();
+  Serial.println("Capturing Camera");
+  fb = esp_camera_fb_get();
 
+  while (!fb) {
+    Serial.println("Camera capture failed!");
+    delay(500);
+    Serial.println("Capturing Camera Again!");
+    fb = esp_camera_fb_get();
+  }
+
+  Serial.println("Connecting to server: " + server_name);
+
+  if (client.connect(server_name.c_str(), server_port)) {
+    Serial.println("Connection successful!");
+    String head =
+        "--RandomNerdTutorials\r\nContent-Disposition: form-data; "
+        "name=\"imageFile\"; filename=\"esp32-cam.jpg\"\r\nContent-Type: "
+        "image/jpeg\r\n\r\n";
+    String tail = "\r\n--RandomNerdTutorials--\r\n";
+
+    uint32_t imageLen = fb->len;
+    uint32_t extraLen = head.length() + tail.length();
+    uint32_t totalLen = imageLen + extraLen;
+    Serial.printf("Message Size: %dB, %dKB\n", totalLen, totalLen / 1024);
+
+    client.println("POST " + server_path + " HTTP/1.1");
+    client.println("Host: " + server_name);
+    client.println("Content-Length: " + String(totalLen));
+    client.println(
+        "Content-Type: multipart/form-data; boundary=RandomNerdTutorials");
+    client.println();
+    client.print(head);
+
+    uint8_t* fbBuf = fb->buf;
+    size_t fbLen = fb->len;
+    for (size_t n = 0; n < fbLen; n = n + 1024) {
+      if (n + 1024 < fbLen) {
+        client.write(fbBuf, 1024);
+        fbBuf += 1024;
+      } else if (fbLen % 1024 > 0) {
+        size_t remainder = fbLen % 1024;
+        client.write(fbBuf, remainder);
+      }
+    }
+    client.print(tail);
+
+    esp_camera_fb_return(fb);
+
+    int timoutTimer = 10000;
+    long startTimer = millis();
+    boolean state = false;
+
+    while ((startTimer + timoutTimer) > millis()) {
+      Serial.print(".");
+      delay(100);
+      while (client.available()) {
+        char c = client.read();
+        if (c == '\n') {
+          if (getAll.length() == 0) {
+            state = true;
+          }
+          getAll = "";
+        } else if (c != '\r') {
+          getAll += String(c);
+        }
+        if (state == true) {
+          getBody += String(c);
+        }
+        startTimer = millis();
+      }
+      if (getBody.length() > 0) {
+        break;
+      }
+    }
+    Serial.println();
+    client.stop();
+    // Serial.println(getBody);
+  } else {
+    getBody = "Connection to " + server_name + " failed.";
+    Serial.println(getBody);
+  }
+  return getBody;
+}
+
+void setupPorts() {
   pinMode(RED, OUTPUT);
   pinMode(GREEN, OUTPUT);
   pinMode(LOCK, OUTPUT);
   pinMode(FLASH, OUTPUT);
 
+  digitalWrite(FLASH, LOW);
+  digitalWrite(LOCK, LOW);
+
+  for (size_t i = 0; i != 10; i++) {
+    digitalWrite(RED, i % 2 ? HIGH : LOW);
+    digitalWrite(GREEN, i % 2 ? LOW : HIGH);
+    delay(100);
+  }
+
+  digitalWrite(RED, HIGH);
+  digitalWrite(GREEN, LOW);
+
+  /* for (size_t i = 0; i != 1; i++) {
+    digitalWrite(LOCK, LOW);
+    delay(1000);
+    digitalWrite(LOCK, HIGH);
+    delay(1000);
+  } */
+
+  digitalWrite(LOCK, LOW);
+  digitalWrite(FLASH, LOW);
+}
+
+void Lock() {
   digitalWrite(LOCK, LOW);
   digitalWrite(RED, HIGH);
   digitalWrite(GREEN, LOW);
-  digitalWrite(FLASH, LOW);
+  Serial.println("Closed Lock");
+}
 
-  Serial.println("SETTING UP WIFI:");
+void UnLock() {
+  digitalWrite(LOCK, HIGH);
+  digitalWrite(RED, LOW);
+  digitalWrite(GREEN, HIGH);
+  Serial.println("Opened Lock");
+}
+
+void setup() {
+  WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0);
+
+  Serial.begin(9600);
+  Serial.setDebugOutput(true);
+  Serial.println();
+  Serial.println("Performing Setup");
+
+  setupPorts();
 
   WiFi.mode(WIFI_STA);
   Serial.println();
@@ -95,8 +216,10 @@ void setup() {
   config.pin_pclk = PCLK_GPIO_NUM;
   config.pin_vsync = VSYNC_GPIO_NUM;
   config.pin_href = HREF_GPIO_NUM;
-  config.pin_sscb_sda = SIOD_GPIO_NUM;
-  config.pin_sscb_scl = SIOC_GPIO_NUM;
+  // config.pin_sscb_sda = SIOD_GPIO_NUM;
+  // config.pin_sscb_scl = SIOC_GPIO_NUM;
+  config.pin_sccb_sda = SIOD_GPIO_NUM;
+  config.pin_sccb_scl = SIOC_GPIO_NUM;
   config.pin_pwdn = PWDN_GPIO_NUM;
   config.pin_reset = RESET_GPIO_NUM;
   config.xclk_freq_hz = 20000000;
@@ -123,125 +246,23 @@ void setup() {
 }
 
 void loop() {
-  // put your main code here, to run repeatedly:
-  /*  digitalWrite(RED, HIGH);
-   digitalWrite(GREEN, LOW);
-   digitalWrite(LOCK, LOW);
-
-   delay(2000);
-
-
-
-   delay(2000); */
-
   unsigned long currentMillis = millis();
   if (currentMillis - previousMillis >= timerInterval) {
     previousMillis = currentMillis;
 
-    String result = sendPhoto();
+    String result = checkPhoto();
+    result.toUpperCase();
+    // String result = "UNLOCK";
+    Serial.printf("Server Return: %s\n", result.c_str());
 
-    if (result == "UNLOCK") {
-      Serial.println("UNLOCKED");
-      digitalWrite(RED, LOW);
-      digitalWrite(GREEN, HIGH);
-      digitalWrite(LOCK, HIGH);
+    if (result.indexOf("UNLOCK") != -1)
+      UnLock();
+    else
+      Lock();
 
-    } else {
-      Serial.println("LOCKED");
-      digitalWrite(RED, HIGH);
-      digitalWrite(GREEN, LOW);
-      digitalWrite(LOCK, LOW);
-    }
+    // if (result.compareTo("UNLOCK")) UnLock();
+    // if (result.compareTo("LOCK")) Lock();
   }
 }
 
-String sendPhoto() {
-  String getAll;
-  String getBody;
-
-  camera_fb_t* fb = NULL;
-
-  fb = esp_camera_fb_get();
-  if (!fb) {
-    Serial.println("Camera capture failed");
-    delay(1000);
-    ESP.restart();
-  }
-
-  Serial.println("Connecting to server: " + server_name);
-
-  if (client.connect(server_name.c_str(), server_port)) {
-    Serial.println("Connection successful!");
-    String head =
-        "--RandomNerdTutorials\r\nContent-Disposition: form-data; "
-        "name=\"imageFile\"; filename=\"esp32-cam.jpg\"\r\nContent-Type: "
-        "image/jpeg\r\n\r\n";
-    String tail = "\r\n--RandomNerdTutorials--\r\n";
-
-    uint32_t imageLen = fb->len;
-    uint32_t extraLen = head.length() + tail.length();
-    uint32_t totalLen = imageLen + extraLen;
-
-    client.println("POST " + server_path + " HTTP/1.1");
-    client.println("Host: " + server_name);
-    client.println("Content-Length: " + String(totalLen));
-    client.println(
-        "Content-Type: multipart/form-data; boundary=RandomNerdTutorials");
-    client.println();
-    client.print(head);
-
-    uint8_t* fbBuf = fb->buf;
-    size_t fbLen = fb->len;
-    for (size_t n = 0; n < fbLen; n = n + 1024) {
-      if (n + 1024 < fbLen) {
-        client.write(fbBuf, 1024);
-        fbBuf += 1024;
-      } else if (fbLen % 1024 > 0) {
-        size_t remainder = fbLen % 1024;
-        client.write(fbBuf, remainder);
-      }
-    }
-    client.print(tail);
-
-    digitalWrite(FLASH, HIGH);
-    delay(1000);
-    esp_camera_fb_return(fb);
-    delay(500);
-    digitalWrite(FLASH, LOW);
-
-    int timoutTimer = 10000;
-    long startTimer = millis();
-    boolean state = false;
-
-    while ((startTimer + timoutTimer) > millis()) {
-      Serial.print(".");
-      delay(100);
-      while (client.available()) {
-        char c = client.read();
-        if (c == '\n') {
-          if (getAll.length() == 0) {
-            state = true;
-          }
-          getAll = "";
-        } else if (c != '\r') {
-          getAll += String(c);
-        }
-        if (state == true) {
-          getBody += String(c);
-        }
-        startTimer = millis();
-      }
-      if (getBody.length() > 0) {
-        break;
-      }
-    }
-    Serial.println();
-    client.stop();
-    Serial.println(getBody);
-  } else {
-    getBody = "Connection to " + server_name + " failed.";
-    Serial.println(getBody);
-  }
-  return getBody;
-}
 // 192.168.29.98
