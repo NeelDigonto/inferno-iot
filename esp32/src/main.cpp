@@ -14,8 +14,9 @@
 
 const char* ssid = "fathomless";
 const char* password = "theviper46";
-String server_name = "192.168.29.98";
-String server_url = "http://192.168.29.98:4000/validate";
+// String server_name = "192.168.29.98";
+String server_name = "13.233.251.246";
+String server_url = "http://" + server_name + ":4000/validate";
 String server_path = "/validate";
 const int server_port = 4000;
 
